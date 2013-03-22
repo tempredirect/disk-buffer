@@ -15,8 +15,17 @@ import static java.nio.file.StandardOpenOption.WRITE;
  */
 public class DiskBuffer implements AutoCloseable {
 
-    private final static byte RECORD_INITIAL = 0x1;
-    private final static byte RECORD_CONTINUATION = 0x2;
+    enum Type {
+        INITIAL(4),
+        CONTINUATION(0);
+
+        private final int metaSize;
+
+        Type(int additional) {
+            metaSize = 8 + 1 + additional;
+        }
+        public int metaSize(){ return metaSize ; }
+    }
 
     public static DiskBuffer open( File file ) throws IOException {
         FileChannel fileChannel = FileChannel.open(file.toPath(), READ, WRITE);
@@ -50,21 +59,45 @@ public class DiskBuffer implements AutoCloseable {
      */
     public long append( ByteBuffer buffer ) throws IOException {
         int recordSize = buffer.limit() - buffer.position();
+
         long recordId = allocateId();
         int written = 0;
         while( written < recordSize) {
+            Type type = written == 0 ? Type.INITIAL : Type.CONTINUATION ;
+            int remaining = recordSize - written;
+            int availableFrame = frameSize - type.metaSize();
+            int toWrite = Math.min(remaining, availableFrame );
             frameBuffer.clear();
-            frameBuffer.putLong(recordId)
-                .put(written == 0 ? RECORD_INITIAL : RECORD_CONTINUATION)
-                .put(buffer).flip()
+            frameBuffer.putLong(recordId);
+
+            switch( type ){
+                case INITIAL:
+                    frameBuffer.put( (byte)type.ordinal() ).putInt( recordSize );
+                    break;
+                case CONTINUATION:
+                    frameBuffer.put( (byte)type.ordinal() );
+                    break;
+                default:
+                    throw new AssertionError("unknown type");
+            }
+
+            // advance the limit
+            buffer.limit(written + toWrite);
+
+            frameBuffer.put(buffer);
+
+            frameBuffer
+                .flip()
                 .limit(frameSize);
 
             int progress = 0;
             while( progress < frameSize ) {
                 progress = fileChannel.write(frameBuffer);
             }
-            written = recordSize;
+
+            written += toWrite;
         }
+        fileChannel.force(false); //sync to disk
 
         return recordId;
     }
