@@ -133,14 +133,81 @@ class DiskBufferSpecification extends Specification {
 
     def "single dataFrame single Recor get(end) returns buffer with contents"(){
         def input = "Hello World".bytes
+
         setup:
         testObject.append( ByteBuffer.wrap(input) )
 
         when:
         def result = testObject.get( 1L )
+        def out = ByteArrays.allocate(result.remaining())
+        result.get(out)
+        def str = new String(out)
 
         then:
         result.limit() == input.length
+        str == "Hello World"
+    }
 
+    def "3 single dataFrame Record get(end) returns buffer with contents"(){
+        setup:
+        3.times {testObject.append( ByteBuffer.wrap("Hello World ${it + 1}".bytes) )}
+
+        when:
+        def result = testObject.get( 3L )
+        def out = ByteArrays.allocate(result.remaining())
+        result.get(out)
+        def str = new String(out)
+
+        then:
+        result.limit() == "Hello World 3".length()
+        str == "Hello World 3"
+    }
+
+    def "3 single dataFrame Record get(1) returns buffer with contents"(){
+        setup:
+        3.times {testObject.append( ByteBuffer.wrap("Hello World ${it + 1}".bytes) )}
+
+        when:
+        def result = testObject.get( 1L )
+        def out = ByteArrays.allocate(result.remaining())
+        result.get(out)
+        def str = new String(out)
+
+        then:
+        result.limit() == "Hello World 1".length()
+        str == "Hello World 1"
+    }
+
+    def "3 single dataFrame Record get(2) returns buffer with contents"(){
+        setup:
+        3.times {testObject.append( ByteBuffer.wrap("Hello World ${it + 1}".bytes) )}
+
+        when:
+        def result = testObject.get( 2L )
+        def out = ByteArrays.allocate(result.remaining())
+        result.get(out)
+        def str = new String(out)
+
+        then:
+        result.limit() == "Hello World 2".length()
+        str == "Hello World 2"
+    }
+
+    def "300 single dataFrame Records select multiple"(long index){
+        setup:
+        300.times {testObject.append( ByteBuffer.wrap("Hello World ${it + 1}".bytes) )}
+
+        when:
+        def result = testObject.get( index )
+        def out = ByteArrays.allocate(result.remaining())
+        result.get(out)
+        def str = new String(out)
+
+        then:
+        result.limit() == "Hello World ${index}".length()
+        str == "Hello World ${index}"
+
+        where:
+        index << [ 3, 30, 40 , 77, 110, 232, 299]
     }
 }

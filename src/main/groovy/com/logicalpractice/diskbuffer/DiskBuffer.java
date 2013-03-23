@@ -111,8 +111,12 @@ public final class DiskBuffer implements AutoCloseable {
     }
 
     public long start(){ return start ;}
+    private long first() { return start() + 1; }
+
     public long end(){ return end.id(); }
+
     public long size(){ return end() - start;}
+
 
     /**
      * Append the readable contains of the given byte buffer
@@ -165,7 +169,6 @@ public final class DiskBuffer implements AutoCloseable {
         return recordId;
     }
 
-
     public ByteBuffer get( long id ) throws IOException {
         if( id <= start() ){
             throw new IllegalArgumentException("id <= start. Not present in this DiskBuffer");
@@ -179,8 +182,11 @@ public final class DiskBuffer implements AutoCloseable {
         if( id == endId ) {
             return readRecordStarting( end.index() );
         }
+        if( id == start + 1 ) { // start is the id before the first
+            return readRecordStarting( 0 );
+        }
 
-        long recordIndex = id - start(); // looking for the recordIndex'th record in this buffer
+        long recordIndex = id - first(); // looking for the recordIndex'th record in this buffer
 
         long frameIndex = recordIndex * averageFrameCount()  ;
 
