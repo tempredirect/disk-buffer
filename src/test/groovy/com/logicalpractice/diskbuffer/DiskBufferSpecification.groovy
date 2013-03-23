@@ -64,4 +64,83 @@ class DiskBufferSpecification extends Specification {
         testObject.size() == 1L
         file.size() == 2048L * 2
     }
+
+    def "readHeader returns id and type for index 0"(){
+        setup:
+        testObject.append( ByteBuffer.wrap(bytes4000) )
+
+        when:
+        def result = testObject.readHeader(0)
+
+        then:
+        result.id() == 1L
+        result.type() == DiskBuffer.Type.INITIAL
+    }
+
+    def "readHeader returns id and type CONTIN for index 1"(){
+        setup:
+        testObject.append( ByteBuffer.wrap(bytes4000) )
+        when:
+        def result = testObject.readHeader(1)
+
+        then:
+        result.id() == 1L
+        result.type() == DiskBuffer.Type.CONTINUATION
+    }
+
+    def "readFrame returns buffer of limit frameSize for index 0"(){
+        setup:
+        testObject.append( ByteBuffer.wrap(bytes4000) )
+
+        when:
+        def result = testObject.readFrame( 0 )
+
+        then:
+        result.limit() == 2048
+        result.getLong() == 1L
+    }
+
+    def "readFrame returns buffer of limit frameSize for index 1"(){
+        setup:
+        testObject.append( ByteBuffer.wrap(bytes4000) )
+
+        when:
+        def result = testObject.readFrame( 1 )
+
+        then:
+        result.limit() == 2048
+        result.getLong() == 1L
+    }
+
+    def "get() throws IllegalArgumentException if id is less than start"(){
+        when:
+        testObject.get( 0L )
+
+        then:
+        thrown(IllegalArgumentException)
+    }
+
+    def "get() throws IllegalArgumentException if id is greater than end"(){
+        setup:
+        testObject.append( ByteBuffer.wrap(bytes4000) )
+
+        when:
+        testObject.get(2L)
+
+        then:
+        thrown(IllegalArgumentException)
+    }
+
+    def "single dataFrame single Recor get(end) returns buffer with contents"(){
+        def input = "Hello World".bytes
+        setup:
+        testObject.append( ByteBuffer.wrap(input) )
+
+        when:
+        def result = testObject.get( 1L )
+
+        then:
+        result.limit() == input.length
+
+    }
 }
