@@ -13,3 +13,9 @@ dependencies {
 task wrapper(type:Wrapper) {
     gradleVersion = "1.4"
 }
+
+task runConsole(type:JavaExec,dependsOn:'classes') {
+    main = "org.codehaus.groovy.tools.GroovyStarter"
+    args = ["--main", "groovy.ui.Console"]
+    classpath = sourceSets.main.runtimeClasspath
+}
