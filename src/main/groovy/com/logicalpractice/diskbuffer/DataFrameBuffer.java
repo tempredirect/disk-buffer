@@ -6,32 +6,86 @@ import com.google.common.collect.Lists;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
+import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.util.List;
+
+import static com.google.common.base.Preconditions.checkArgument;
 
 /**
  *
  */
-public class DataFrameBuffer {
+public final class DataFrameBuffer implements AutoCloseable {
 
-    private int pageSize = (int)Math.pow(2, 16); // 64k
+    public static final int DEFAULT_PAGE_SIZE = (int)Math.pow(2, 16); // 64k
 
-    private int frameSize = pageSize / 32; // 2K
+    public static final int DEFAULT_FRAME_SIZE = DEFAULT_PAGE_SIZE / 32; // 2k
 
-    private long pageCount = 0 ;
+    public static DataFrameBuffer open(Path path, BufferAllocator allocator, int pageSize, int frameSize)
+            throws IOException {
+
+        checkArgument( path != null, "'path' is required");
+        checkArgument( allocator != null, "'allocator' is required");
+        checkArgument( pageSize > 0, "'pageSize' must be positive");
+        checkArgument( frameSize > 0, "'frameSize' must be positive");
+        checkArgument( pageSize % frameSize == 0, "'frameSize' must be a factor of 'pageSize'");
+
+        FileChannel fc = FileChannel.open(path, StandardOpenOption.READ, StandardOpenOption.WRITE, StandardOpenOption.CREATE);
+
+        DataFrameBuffer dfb = new DataFrameBuffer(fc, allocator, pageSize, frameSize);
+
+        dfb.initialise(); // will load the lastPage and initialise the internals
+
+        return dfb;
+    }
+
+    public static DataFrameBuffer open(Path path) throws IOException {
+        return open( path, new DirectBufferAllocator(), DataFrameBuffer.DEFAULT_PAGE_SIZE, DataFrameBuffer.DEFAULT_FRAME_SIZE);
+    }
+
+    private final int pageSize;
+
+    private final int frameSize ;
+
+    private long pageCount = 0 ;  // complete pages
     private long frameCount = 0;
 
     private ByteBuffer lastPage ;
 
     private final FileChannel fileChannel;
 
-    private final BufferAllocator allocator = new DirectBufferAllocator();
+    private final BufferAllocator allocator;
 
-    public DataFrameBuffer(FileChannel fileChannel) {
+    private DataFrameBuffer(FileChannel fileChannel, BufferAllocator allocator, int pageSize, int frameSize) {
         this.fileChannel = fileChannel;
-        this.lastPage = allocator.allocate(pageSize);
-        // todo read the last page into the 'lastPage' buffer
+        this.allocator = allocator;
+        this.pageSize = pageSize;
+        this.frameSize = frameSize;
     }
 
+    private void initialise() throws IOException {
+        lastPage = allocator.allocate(pageSize);
+        long size = fileChannel.size();
+        if( size == 0 ){
+            pageCount = 0;
+            frameCount = 0;
+        } else {
+            if( size % frameSize > 0 ) {
+                throw new IllegalStateException("Unable to handle corrupt frame files at the moment");
+            }
+            long completePages = size / pageSize ;
+            long lastPageOffset = completePages * pageSize;
+            long lastPageSize = size - lastPageOffset;
+            if( lastPageSize > 0 ){
+                int read = 0;
+                while( read < lastPageSize ){
+                    read += fileChannel.read(lastPage, lastPageOffset + read);
+                }
+            }
+            pageCount = completePages;
+            frameCount = completePages * (pageSize / frameSize) + (lastPageSize / frameSize) ;
+        }
+    }
     public void append(ByteBuffer frame) throws IOException {
         append(new ByteBuffer[]{frame} );
     }
@@ -65,7 +119,7 @@ public class DataFrameBuffer {
 
     private void checkBuffersSizes(ByteBuffer[] frames) {
         for (ByteBuffer frame : frames) {
-            Preconditions.checkArgument(frame.remaining() == frameSize, "frame must be of exactly frameSize");
+            checkArgument(frame.remaining() == frameSize, "frame must be of exactly frameSize");
         }
     }
 
@@ -124,4 +178,13 @@ public class DataFrameBuffer {
     }
 
     public int getFrameSize() { return frameSize; }
+
+    public long size() throws IOException { return fileChannel.size(); }
+
+    public long getFrameCount() { return frameCount; }
+
+    @Override
+    public void close() throws Exception {
+        fileChannel.close();
+    }
 }
