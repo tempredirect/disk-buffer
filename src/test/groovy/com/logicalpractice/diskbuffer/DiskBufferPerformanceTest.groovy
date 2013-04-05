@@ -48,7 +48,7 @@ class DiskBufferPerformanceTest {
         }
     }
 
-    def get(index){
+    def get(index) {
         println "get(${index})"
         def result = testObject.get( index )
         def out = ByteArrays.allocate(result.remaining())

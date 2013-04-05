@@ -5,6 +5,8 @@ import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.util.LinkedList;
+import java.util.List;
 
 import static com.google.common.base.Preconditions.checkArgument;
 
@@ -43,6 +45,34 @@ public final class DataFrameBuffer implements AutoCloseable {
                     "} " + super.toString();
         }
     }
+
+    class Page {
+        private final long number ;
+        private final ByteBuffer buffer ;
+
+        Page(long number, ByteBuffer buffer) {
+            this.number = number;
+            this.buffer = buffer;
+        }
+
+        long getNumber() {
+            return number;
+        }
+
+        ByteBuffer getBuffer() {
+            return buffer;
+        }
+
+        ByteBuffer frame(int index){
+            ByteBuffer dupe = buffer.asReadOnlyBuffer();
+            int fs = frameSize;
+            int offset = index * fs;
+            dupe.limit( offset + fs )
+                .position(offset);
+            return dupe.slice();
+        }
+    }
+
     public static final int DEFAULT_PAGE_SIZE = (int)Math.pow(2, 16); // 64k
 
     public static final int DEFAULT_FRAME_SIZE = DEFAULT_PAGE_SIZE / 32; // 2k
@@ -78,7 +108,7 @@ public final class DataFrameBuffer implements AutoCloseable {
     private long pageCount = 0 ;  // complete pages
     private long frameCount = 0;
 
-    private ByteBuffer lastPage ;
+    private Page lastPage ;
 
     private final FileChannel fileChannel;
 
@@ -86,6 +116,8 @@ public final class DataFrameBuffer implements AutoCloseable {
 
     private Stat readStat = new Stat();
     private Stat writeStat = new Stat();
+
+    private List<Page> pageCache = new LinkedList<>();
 
     private DataFrameBuffer(FileChannel fileChannel, BufferAllocator allocator, int pageSize, int frameSize) {
         this.fileChannel = fileChannel;
@@ -98,11 +130,12 @@ public final class DataFrameBuffer implements AutoCloseable {
     }
 
     private void initialise() throws IOException {
-        lastPage = allocator.allocate(pageSize);
+        ByteBuffer lastPageBuff = allocator.allocate(pageSize);
         long size = fileChannel.size();
         if( size == 0 ){
             pageCount = 0;
             frameCount = 0;
+            lastPage = new Page(0, lastPageBuff);
         } else {
             if( size % frameSize > 0 ) {
                 throw new IllegalStateException("Unable to handle corrupt frame files at the moment");
@@ -113,16 +146,19 @@ public final class DataFrameBuffer implements AutoCloseable {
             if( lastPageSize > 0 ){
                 int read = 0;
                 while( read < lastPageSize ){
-                    read += fileChannel.read(lastPage, lastPageOffset + read);
+                    read += fileChannel.read(lastPageBuff, lastPageOffset + read);
                 }
             }
             pageCount = completePages;
             frameCount = completePages * (pageSize / frameSize) + (lastPageSize / frameSize) ;
+            lastPage = new Page(completePages + 1, lastPageBuff);
         }
     }
+
     public void append(ByteBuffer frame) throws IOException {
         append(new ByteBuffer[]{frame} );
     }
+
     public void append(ByteBuffer [] frames) throws IOException {
         checkBuffersSizes(frames);
         int framesWritten = 0;
@@ -140,7 +176,7 @@ public final class DataFrameBuffer implements AutoCloseable {
 
             for (ByteBuffer frame : toWrite) {
                 frame.flip();
-                lastPage.put(frame);
+                lastPage.getBuffer().put(frame);
             }
             framesWritten += framesToWrite;
         }
@@ -156,13 +192,13 @@ public final class DataFrameBuffer implements AutoCloseable {
     }
 
     private int ensureRemainingFrames() {
-        int remaining = lastPage.remaining() / frameSize;
+        int remaining = lastPage.getBuffer().remaining() / frameSize;
         if( remaining == 0 ) {
-            ByteBuffer toRecycle = lastPage;
-            lastPage = allocator.allocate(pageSize);
+            Page previousPage = lastPage ;
+            lastPage = new Page( previousPage.getNumber() + 1L, allocator.allocate(pageSize));
             pageCount ++;
-            allocator.recycle(toRecycle);
-            remaining = pageSize / frameSize;
+            pageCache.add( previousPage );
+            remaining = framesPerPage;
         }
         return remaining;
     }
@@ -175,18 +211,10 @@ public final class DataFrameBuffer implements AutoCloseable {
             throw new IllegalArgumentException("index is less than zero");
         }
         long page = index / framesPerPage;
-        ByteBuffer pageBuffer = page(page);
-
-        int offset = (int)(index % framesPerPage) * frameSize;
-
-        ByteBuffer dupe = pageBuffer.asReadOnlyBuffer();
-        dupe.limit(offset + frameSize)
-                .position(offset);
-
-        return dupe.slice();
+        return page(page).frame( (int)index % framesPerPage);
     }
 
-    private ByteBuffer page( long pageNumber ) throws IOException {
+    private Page page( long pageNumber ) throws IOException {
 
         if( pageNumber == pageCount ) {
             // is last page
@@ -196,14 +224,14 @@ public final class DataFrameBuffer implements AutoCloseable {
         return loadPage( pageNumber );
     }
 
-    private ByteBuffer loadPage( long pageNumber ) throws IOException {
+    private Page loadPage( long pageNumber ) throws IOException {
         ByteBuffer page = allocator.allocate(pageSize);
 
         int toRead = pageSize;
         long offset = pageNumber * pageSize;
         read(page, offset, toRead);
 
-        return page;
+        return new Page(pageNumber, page);
     }
 
     private void read(ByteBuffer page, long offset, int toRead) throws IOException {

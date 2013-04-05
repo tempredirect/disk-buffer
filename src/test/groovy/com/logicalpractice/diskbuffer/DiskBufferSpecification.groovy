@@ -131,7 +131,7 @@ class DiskBufferSpecification extends Specification {
         thrown(IllegalArgumentException)
     }
 
-    def "single dataFrame single Recor get(end) returns buffer with contents"(){
+    def "single dataFrame single record get(end) returns buffer with contents"(){
         def input = "Hello World".bytes
 
         setup:
