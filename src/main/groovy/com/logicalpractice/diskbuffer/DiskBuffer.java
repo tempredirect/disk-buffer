@@ -1,12 +1,8 @@
 package com.logicalpractice.diskbuffer;
 
-import java.io.File;
 import java.io.IOException;
 import java.nio.ByteBuffer;
-import java.nio.channels.FileChannel;
-
-import static java.nio.file.StandardOpenOption.READ;
-import static java.nio.file.StandardOpenOption.WRITE;
+import java.nio.file.Path;
 
 /**
  *
@@ -60,6 +56,15 @@ public final class DiskBuffer implements AutoCloseable {
             int meta = readBuffer.getInt();
             return new RecordHeader( id, type, meta );
         }
+
+        @Override
+        public String toString() {
+            return "RecordHeader{" +
+                    "id=" + id +
+                    ", type=" + type +
+                    ", meta=" + meta +
+                    "} " + super.toString();
+        }
     }
 
     static class Position {
@@ -79,20 +84,15 @@ public final class DiskBuffer implements AutoCloseable {
         public long index() { return index; }
     }
 
-    public static DiskBuffer open( File file ) throws IOException {
-        FileChannel fileChannel = FileChannel.open(file.toPath(), READ, WRITE);
-        fileChannel.position( fileChannel.size() );
-        return new DiskBuffer( fileChannel, 0, 2048 );
+    public static DiskBuffer open( Path path ) throws IOException {
+        DataFrameBuffer dfb = DataFrameBuffer.open(path);
+        return new DiskBuffer(dfb , dfb.getFrameSize());
     }
 
     private final long start ;
     private final int frameSize ;
 
-    private final FileChannel fileChannel;
-
-    // these are frame readers
-    private final ByteBuffer writeBuffer;
-    private final ByteBuffer readBuffer;
+    private final DataFrameBuffer dfb;
 
     private final BufferAllocator allocator = new DirectBufferAllocator();
 
@@ -102,12 +102,11 @@ public final class DiskBuffer implements AutoCloseable {
     // this is about the only thing that changes ... it progresses as data is appended
     private volatile Position end = new Position(0L,0L);
 
-    private DiskBuffer( FileChannel fileChannel, long start, int frameSize) {
-        this.start = start;
+    private DiskBuffer( DataFrameBuffer dfb, int frameSize) {
         this.frameSize = frameSize;
-        this.fileChannel = fileChannel;
-        this.writeBuffer = ByteBuffer.allocateDirect(frameSize);
-        this.readBuffer = ByteBuffer.allocateDirect(frameSize);
+        this.dfb = dfb;
+        // FIXME work out if start still makes any sense
+        this.start = 0;
     }
 
     public long start(){ return start ;}
@@ -124,49 +123,52 @@ public final class DiskBuffer implements AutoCloseable {
      * @return record id
      */
     public long append( ByteBuffer buffer ) throws IOException {
-        int recordSize = buffer.limit() - buffer.position();
+        int recordSize = buffer.remaining();
 
         long recordId = end() + 1L;
-        int written = 0;
-        long writePosition = fileChannel.position() ;
-        int framesWritten = 0;
+        long recordPosition = dfb.getFrameCount();
 
-        while( written < recordSize) {
-            Type type = written == 0 ? Type.INITIAL : Type.CONTINUATION ;
-            int remaining = recordSize - written;
-            int availableFrame = frameSize - type.metaSize();
-            int toWrite = Math.min(remaining, availableFrame );
-            writeBuffer.clear();
-            writeBuffer.putLong(recordId);
+        ByteBuffer [] frames = frameBuffersFor(recordSize);
+        int availableFrame = frameSize - Type.metaSize();
 
-            writeBuffer.put(type.index())
-                .putInt( type == Type.INITIAL ? recordSize : framesWritten);
+        // prepare frames
+        for (int i = 0; i < frames.length; i++) {
+            ByteBuffer buff = frames[i];
+            Type type = i == 0 ? Type.INITIAL : Type.CONTINUATION ;
+            int toWrite = Math.min(buffer.remaining(), availableFrame );
+            buff.putLong(recordId);
 
-            // advance the limit
-            buffer.limit(written + toWrite);
+            buff.put(type.index())
+                .putInt( type == Type.INITIAL ? recordSize : i);
 
-            writeBuffer.put(buffer);
-
-            writeBuffer
-                .flip()
-                .limit(frameSize);
-
-            int progress = 0;
-            while( progress < frameSize ) {
-                progress += fileChannel.write(writeBuffer);
-            }
-
-            written += toWrite;
-            framesWritten ++;
+            ByteBuffer view = buffer.duplicate();
+            view.position(i * availableFrame).limit(toWrite);
+            buff.put(view);
+            buff.position(0);
         }
-        fileChannel.force(false); //sync to disk
 
-        frameCount += framesWritten;
+        dfb.append(frames);
+
+        frameCount += frames.length;
         recordCount ++;
+
         // assigning this last makes the record visible via get()
-        end = new Position(recordId, writePosition / frameSize);
+        end = new Position(recordId, recordPosition);
 
         return recordId;
+    }
+
+    private ByteBuffer [] frameBuffersFor(int recordSize) {
+        int frameUsageSize = frameSize - Type.metaSize();
+        int required = recordSize / frameUsageSize + 1;
+
+        ByteBuffer [] buffers = new ByteBuffer[required];
+
+        // possible optimisation is to allocate a single buffer and split into views
+        for (int i = 0; i < required; i++) {
+            buffers[i] = allocator.allocate(frameSize);
+        }
+        return buffers;
     }
 
     public ByteBuffer get( long id ) throws IOException {
@@ -221,32 +223,38 @@ public final class DiskBuffer implements AutoCloseable {
 
     private ByteBuffer readRecordStarting(long frameIndex) throws IOException {
 
-        RecordHeader initialHeader = readHeader(frameIndex);
+        ByteBuffer frame = dfb.get(frameIndex);
+        RecordHeader initialHeader = RecordHeader.fromBuffer(frame);
 
         assert initialHeader.type() == Type.INITIAL;
 
-        int dataSize = initialHeader.meta();
+        int dataSize = initialHeader.meta(); // which for initial is the size of the record
 
         ByteBuffer result = allocator.allocate(dataSize);
 
         int remaining = dataSize;
         int metaSize = Type.metaSize();
+        int frameAvailable = frameSize - metaSize;
+        int toRead = Math.min(frameAvailable, remaining );
+        frame.limit( metaSize + toRead );
+        result.put(frame);
 
-        while( remaining > 0 ){
+        remaining -= toRead;
 
-            int toRead = Math.min(frameSize - metaSize, remaining );
-            result.limit(toRead + result.position());
-            int read = 0;
-            do{
-                read +=fileChannel.read( result, offsetOf(frameIndex) + read + metaSize);
-            } while( read < toRead );
-            remaining -= read;
+        while( remaining > 0 ) {
             frameIndex ++;
+            frame = dfb.get( frameIndex );
+            RecordHeader header = RecordHeader.fromBuffer(frame);
+            if( header.id() != frameIndex ) {
+                throw new IllegalStateException("Corrupt datafile, was expecting id=" + frameIndex + " but got:" + header);
+            }
+            toRead = Math.min(frameAvailable, remaining );
+            frame.position(metaSize).limit(metaSize + toRead);
+            result.put( frame );
         }
         result.flip();
 
         return result;
-
     }
 
     private int averageFrameCount() {
@@ -255,38 +263,15 @@ public final class DiskBuffer implements AutoCloseable {
 
 
     RecordHeader readHeader( long index ) throws IOException {
-        long offset = offsetOf( index );
-        readBuffer.clear();
-        int read = 0;
-        do {
-            read += fileChannel.read( readBuffer, offset + read );
-        } while( read < Type.INITIAL.metaSize() ); // todo the metaSize is now constant for both types
-
-        readBuffer.flip();
-
-        return RecordHeader.fromBuffer(readBuffer);
+        return RecordHeader.fromBuffer(dfb.get(index));
     }
 
     ByteBuffer readFrame( long index ) throws IOException {
-
-        long offset = offsetOf(index);
-
-        readBuffer.clear();
-
-        int read = 0;
-        while ( read < frameSize ) {
-            read += fileChannel.read( readBuffer, offset + read );
-        }
-        readBuffer.flip();
-        return readBuffer;
-    }
-
-    private long offsetOf(long index) {
-        return frameSize * index;
+        return dfb.get(index);
     }
 
     @Override
     public void close() throws Exception {
-        fileChannel.close();
+        dfb.close();
     }
 }

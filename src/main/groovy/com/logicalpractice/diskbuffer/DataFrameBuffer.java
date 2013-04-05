@@ -1,14 +1,10 @@
 package com.logicalpractice.diskbuffer;
 
-import com.google.common.base.Preconditions;
-import com.google.common.collect.Lists;
-
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
-import java.util.List;
 
 import static com.google.common.base.Preconditions.checkArgument;
 
@@ -47,6 +43,8 @@ public final class DataFrameBuffer implements AutoCloseable {
 
     private final int frameSize ;
 
+    private final int framesPerPage ;
+
     private long pageCount = 0 ;  // complete pages
     private long frameCount = 0;
 
@@ -61,6 +59,9 @@ public final class DataFrameBuffer implements AutoCloseable {
         this.allocator = allocator;
         this.pageSize = pageSize;
         this.frameSize = frameSize;
+
+        this.framesPerPage = pageSize / frameSize;
+
     }
 
     private void initialise() throws IOException {
@@ -142,16 +143,16 @@ public final class DataFrameBuffer implements AutoCloseable {
         if( index < 0 ) {
             throw new IllegalArgumentException("index is less than zero");
         }
-        long page = index / pageSize;
-        int offset = (int)(index % pageSize) * frameSize;
+        long page = index / framesPerPage;
         ByteBuffer pageBuffer = page(page);
 
-        ByteBuffer result = pageBuffer.duplicate();
+        int offset = (int)(index % framesPerPage) * frameSize;
 
-        result.limit(offset + frameSize)
-              .position(offset);
+        ByteBuffer dupe = pageBuffer.asReadOnlyBuffer();
+        dupe.limit(offset + frameSize)
+                .position(offset);
 
-        return result.asReadOnlyBuffer();
+        return dupe.slice();
     }
 
     private ByteBuffer page( long pageNumber ) throws IOException {
@@ -178,8 +179,6 @@ public final class DataFrameBuffer implements AutoCloseable {
     }
 
     public int getFrameSize() { return frameSize; }
-
-    public long size() throws IOException { return fileChannel.size(); }
 
     public long getFrameCount() { return frameCount; }
 

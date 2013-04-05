@@ -12,7 +12,7 @@ class DiskBufferSpecification extends Specification {
 
     File file = File.createTempFile("diskbuffer", "dat")
 
-    DiskBuffer testObject = DiskBuffer.open(file)
+    DiskBuffer testObject = DiskBuffer.open(file.toPath())
 
     def bytes4000 = ('a' * 4000).bytes
 
@@ -198,6 +198,7 @@ class DiskBufferSpecification extends Specification {
         300.times {testObject.append( ByteBuffer.wrap("Hello World ${it + 1}".bytes) )}
 
         when:
+        println "get(${index})"
         def result = testObject.get( index )
         def out = ByteArrays.allocate(result.remaining())
         result.get(out)
