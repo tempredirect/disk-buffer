@@ -13,6 +13,36 @@ import static com.google.common.base.Preconditions.checkArgument;
  */
 public final class DataFrameBuffer implements AutoCloseable {
 
+    public static class Stat {
+        private long ops = 0;
+        private long bytes = 0;
+
+        public long getOps() {
+            return ops;
+        }
+
+        public long getBytes() {
+            return bytes;
+        }
+
+        void inc( long bytes ) {
+            ops ++;
+            this.bytes += bytes;
+        }
+
+        public void reset() {
+            ops = 0;
+            bytes = 0;
+        }
+
+        @Override
+        public String toString() {
+            return "Stat{" +
+                    "ops=" + ops +
+                    ", bytes=" + bytes +
+                    "} " + super.toString();
+        }
+    }
     public static final int DEFAULT_PAGE_SIZE = (int)Math.pow(2, 16); // 64k
 
     public static final int DEFAULT_FRAME_SIZE = DEFAULT_PAGE_SIZE / 32; // 2k
@@ -53,6 +83,9 @@ public final class DataFrameBuffer implements AutoCloseable {
     private final FileChannel fileChannel;
 
     private final BufferAllocator allocator;
+
+    private Stat readStat = new Stat();
+    private Stat writeStat = new Stat();
 
     private DataFrameBuffer(FileChannel fileChannel, BufferAllocator allocator, int pageSize, int frameSize) {
         this.fileChannel = fileChannel;
@@ -103,9 +136,7 @@ public final class DataFrameBuffer implements AutoCloseable {
             System.arraycopy(frames, framesWritten, toWrite, 0, framesToWrite);
 
             int expected = framesToWrite * frameSize;
-            int written = 0;
-
-            while( written < expected ) written += fileChannel.write(toWrite);
+            write(toWrite, expected);
 
             for (ByteBuffer frame : toWrite) {
                 frame.flip();
@@ -170,12 +201,26 @@ public final class DataFrameBuffer implements AutoCloseable {
 
         int toRead = pageSize;
         long offset = pageNumber * pageSize;
+        read(page, offset, toRead);
+
+        return page;
+    }
+
+    private void read(ByteBuffer page, long offset, int toRead) throws IOException {
         int haveRead = 0;
         while( haveRead < toRead ) {
             haveRead += fileChannel.read(page, offset + haveRead);
         }
 
-        return page;
+        readStat.inc( haveRead );
+    }
+
+    private void write(ByteBuffer[] toWrite, int expected) throws IOException {
+        int written = 0;
+        while( written < expected ) written += fileChannel.write(toWrite);
+
+        writeStat.inc(written);
+
     }
 
     public int getFrameSize() { return frameSize; }
@@ -185,5 +230,13 @@ public final class DataFrameBuffer implements AutoCloseable {
     @Override
     public void close() throws Exception {
         fileChannel.close();
+    }
+
+    public Stat getReadStat() {
+        return readStat;
+    }
+
+    public Stat getWriteStat() {
+        return writeStat;
     }
 }

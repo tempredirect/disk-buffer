@@ -89,6 +89,10 @@ public final class DiskBuffer implements AutoCloseable {
         return new DiskBuffer(dfb , dfb.getFrameSize());
     }
 
+    public static DiskBuffer newWith( DataFrameBuffer dfb ){
+        return new DiskBuffer(dfb , dfb.getFrameSize());
+    }
+
     private final long start ;
     private final int frameSize ;
 

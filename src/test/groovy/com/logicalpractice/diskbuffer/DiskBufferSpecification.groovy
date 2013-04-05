@@ -198,6 +198,7 @@ class DiskBufferSpecification extends Specification {
         300.times {testObject.append( ByteBuffer.wrap("Hello World ${it + 1}".bytes) )}
 
         when:
+
         println "get(${index})"
         def result = testObject.get( index )
         def out = ByteArrays.allocate(result.remaining())
