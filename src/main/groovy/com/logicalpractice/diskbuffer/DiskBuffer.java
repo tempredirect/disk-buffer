@@ -1,5 +1,7 @@
 package com.logicalpractice.diskbuffer;
 
+import com.google.common.base.Preconditions;
+
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.file.Path;
@@ -26,6 +28,47 @@ public final class DiskBuffer implements AutoCloseable {
                 default:
                     throw new AssertionError("unknown type index");
             }
+        }
+    }
+
+    public static class Builder {
+        private Path path = null;
+        private DataFrameBuffer dataFrameBuffer = null;
+        private long start = 0;
+
+        private BufferAllocator allocator = new DirectBufferAllocator();
+        private Builder(){}
+
+
+        public Builder withPath(Path path) {
+            this.path = path;
+            return this;
+        }
+
+        public Builder withDataFrameBuffer(DataFrameBuffer buffer) {
+            this.dataFrameBuffer = buffer;
+            return this;
+        }
+
+        public Builder withStart(long start) {
+            this.start = start;
+            return this;
+        }
+
+        public Builder withAllocator( BufferAllocator allocator ){
+            Preconditions.checkArgument( allocator != null, "'allocator' must not be null");
+            this.allocator = allocator;
+            return this;
+        }
+
+        public DiskBuffer build() throws IOException {
+            if( dataFrameBuffer == null ) {
+                if( path == null ) {
+                    throw new IllegalStateException("must specify either a 'path' or 'dataFrameBuffer'");
+                }
+                dataFrameBuffer = DataFrameBuffer.open(path);
+            }
+            return new DiskBuffer(dataFrameBuffer, start, allocator).initialise();
         }
     }
 
@@ -84,36 +127,42 @@ public final class DiskBuffer implements AutoCloseable {
         public long index() { return index; }
     }
 
-    public static DiskBuffer open( Path path ) throws IOException {
-        DataFrameBuffer dfb = DataFrameBuffer.open(path);
-        return new DiskBuffer(dfb , dfb.getFrameSize());
-    }
-
-    public static DiskBuffer newWith( DataFrameBuffer dfb ){
-        return new DiskBuffer(dfb , dfb.getFrameSize());
-    }
+    public static Builder newBuilder() { return new Builder(); }
 
     private final long start ;
     private final int frameSize ;
 
     private final DataFrameBuffer dfb;
 
-    private final BufferAllocator allocator = new DirectBufferAllocator();
+    private final BufferAllocator allocator ;
 
-    private long frameCount = 0L;
     private long recordCount = 0L;
 
     // this is about the only thing that changes ... it progresses as data is appended
-    private volatile Position end = new Position(0L,0L);
+    private volatile Position end ;
 
-    private DiskBuffer( DataFrameBuffer dfb, int frameSize) {
-        this.frameSize = frameSize;
+    private DiskBuffer(DataFrameBuffer dfb, long start, BufferAllocator allocator) {
         this.dfb = dfb;
-        // FIXME work out if start still makes any sense
-        this.start = 0;
+        this.allocator = allocator;
+        this.frameSize = dfb.getFrameSize();
+        this.start = start;
+    }
+
+    private DiskBuffer initialise() throws IOException {
+        if( dfb.getFrameCount() > 0 ) {
+            RecordHeader header = RecordHeader.fromBuffer(dfb.lastFrame());
+            long id = header.id();
+            long index = dfb.last() + header.frameAdjustment();
+            recordCount = id - start();
+            end = new Position(id, index);
+        } else {
+            end = new Position(0L, 0L);
+        }
+        return this;
     }
 
     public long start(){ return start ;}
+
     private long first() { return start() + 1; }
 
     public long end(){ return end.id(); }
@@ -153,7 +202,6 @@ public final class DiskBuffer implements AutoCloseable {
 
         dfb.append(frames);
 
-        frameCount += frames.length;
         recordCount ++;
 
         // assigning this last makes the record visible via get()
@@ -262,7 +310,7 @@ public final class DiskBuffer implements AutoCloseable {
     }
 
     private int averageFrameCount() {
-        return (int) (frameCount / recordCount) ; // todo make averageFrameCount a lot smarter
+        return (int) (dfb.getFrameCount() / recordCount) ; // todo make averageFrameCount a lot smarter
     }
 
 

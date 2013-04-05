@@ -12,7 +12,7 @@ class DiskBufferSpecification extends Specification {
 
     File file = File.createTempFile("diskbuffer", "dat")
 
-    DiskBuffer testObject = DiskBuffer.open(file.toPath())
+    DiskBuffer testObject = DiskBuffer.newBuilder().withPath(file.toPath()).build()
 
     def bytes4000 = ('a' * 4000).bytes
 

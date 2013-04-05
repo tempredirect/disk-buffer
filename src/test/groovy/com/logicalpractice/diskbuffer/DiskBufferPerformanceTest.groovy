@@ -17,7 +17,7 @@ class DiskBufferPerformanceTest {
 
     static DataFrameBuffer dfb = DataFrameBuffer.open(file.toPath())
 
-    static DiskBuffer testObject = DiskBuffer.newWith(dfb)
+    static DiskBuffer testObject = DiskBuffer.newBuilder().withDataFrameBuffer(dfb).build()
 
     @BeforeClass
     public static void setup(){

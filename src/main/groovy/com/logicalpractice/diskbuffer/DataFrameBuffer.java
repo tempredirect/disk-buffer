@@ -214,6 +214,18 @@ public final class DataFrameBuffer implements AutoCloseable {
         return page(page).frame( (int)index % framesPerPage);
     }
 
+
+    public ByteBuffer lastFrame() throws IOException {
+        if( frameCount == 0 ) {
+            throw new IllegalStateException("No last page, the buffer is empty");
+        }
+        return get(last());
+    }
+
+    public long last() {
+        return frameCount - 1L;
+    }
+
     private Page page( long pageNumber ) throws IOException {
 
         if( pageNumber == pageCount ) {
